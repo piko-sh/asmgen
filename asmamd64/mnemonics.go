@@ -200,9 +200,16 @@ const (
 	// 32-bit register, zero-extending.
 	OperationMove16To32BitsZeroExtended = "MOVWLZX"
 
+	// OperationMove32To64BitsZeroExtended is the MOVLQZX mnemonic: move a 32-bit value
+	// into a 64-bit register with zero extension.
+	OperationMove32To64BitsZeroExtended = "MOVLQZX"
+
 	// OperationMove16To64BitsSignExtended is the MOVWQSX mnemonic: load 2 bytes into a
 	// 64-bit register, sign-extending the upper 48 bits.
 	OperationMove16To64BitsSignExtended = "MOVWQSX"
+
+	// OperationMove16Bits is the MOVW mnemonic: move 2 bytes (one word).
+	OperationMove16Bits = "MOVW"
 
 	// OperationMove32Bits is the MOVL mnemonic: move 4 bytes (one long).
 	OperationMove32Bits = "MOVL"
@@ -334,6 +341,14 @@ const (
 	// OperationSignedDivide64Bits is the IDIVQ mnemonic: signed division of RDX:RAX by the
 	// operand; quotient goes to RAX, remainder to RDX.
 	OperationSignedDivide64Bits = "IDIVQ"
+
+	// OperationUnsignedDivide64Bits is the DIVQ mnemonic: unsigned division of RDX:RAX by
+	// the operand, quotient to RAX and remainder to RDX. RDX must be zeroed beforehand.
+	OperationUnsignedDivide64Bits = "DIVQ"
+
+	// OperationBitwiseExclusiveOr32Bits is the XORL mnemonic: 32-bit exclusive OR, most
+	// often used as the idiomatic zeroing of a register's full width.
+	OperationBitwiseExclusiveOr32Bits = "XORL"
 
 	// OperationSignedMultiply64Bits is the IMULQ mnemonic: 64-bit signed multiply.
 	OperationSignedMultiply64Bits = "IMULQ"

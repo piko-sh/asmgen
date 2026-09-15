@@ -211,6 +211,13 @@ const (
 	// OperationLogicalShiftRight32Bits is the LSRW mnemonic: 32-bit logical shift right.
 	OperationLogicalShiftRight32Bits = "LSRW"
 
+	// OperationMove16Bits is the MOVH mnemonic: move 2 bytes (one halfword).
+	OperationMove16Bits = "MOVH"
+
+	// OperationMove16BitsUnsigned is the MOVHU mnemonic: zero-extending 16-bit (halfword)
+	// load.
+	OperationMove16BitsUnsigned = "MOVHU"
+
 	// OperationMove32Bits is the MOVW mnemonic: signed 32-bit (word) move, sign-extending
 	// into a 64-bit register.
 	OperationMove32Bits = "MOVW"
@@ -243,6 +250,9 @@ const (
 	// OperationSignedDivide is the SDIV mnemonic: signed integer division.
 	OperationSignedDivide = "SDIV"
 
+	// OperationUnsignedDivide is the UDIV mnemonic: unsigned 64-bit division.
+	OperationUnsignedDivide = "UDIV"
+
 	// OperationSignedIntConvertToFloat64Bits is the SCVTFD mnemonic: convert a signed
 	// integer to a 64-bit float.
 	OperationSignedIntConvertToFloat64Bits = "SCVTFD"
@@ -252,6 +262,10 @@ const (
 
 	// OperationSubtract is the SUB mnemonic: integer subtraction.
 	OperationSubtract = "SUB"
+
+	// OperationTestBitAndBranchIfNotZero is the TBNZ mnemonic: branch when the specified
+	// bit of the source register is set.
+	OperationTestBitAndBranchIfNotZero = "TBNZ"
 
 	// OperationTestBitAndBranchIfZero is the TBZ mnemonic: branch when the specified bit of
 	// the operand is zero.
