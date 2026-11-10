@@ -58,18 +58,13 @@ const (
 	RegisterBankUnsignedInteger
 )
 
-// The following sub-port interfaces are shared vocabulary types used by piko's
-// domain-specific adapters. They are defined here so that both adapter packages and
-// consumer packages can reference the same types without circular imports. External users
-// of the framework do not need to implement these.
-
 // StringOperationsPort provides architecture-specific string handler implementations.
 type StringOperationsPort interface {
-	// EmitLenString emits the handler for computing string length.
-	EmitLenString(emitter *Emitter)
+	// EmitLengthString emits the handler for the length of a string.
+	EmitLengthString(emitter *Emitter)
 
-	// EmitStringIndex emits the handler for indexing into a string.
-	EmitStringIndex(emitter *Emitter)
+	// EmitGetStringByte emits the handler that reads the byte at an index of a string.
+	EmitGetStringByte(emitter *Emitter)
 
 	// EmitEqualString emits the handler for string equality comparison.
 	EmitEqualString(emitter *Emitter)
@@ -80,12 +75,13 @@ type StringOperationsPort interface {
 	// EmitSliceString emits the handler for slicing a string.
 	EmitSliceString(emitter *Emitter)
 
-	// EmitStringIndexToInt emits the handler for converting a string index to an integer.
-	EmitStringIndexToInt(emitter *Emitter)
+	// EmitGetStringByteAsInt64 emits the handler that reads the byte at an index of a string
+	// as an int64.
+	EmitGetStringByteAsInt64(emitter *Emitter)
 
-	// EmitLenStringLtJumpFalse emits the handler for branching when string length is less
-	// than a value.
-	EmitLenStringLtJumpFalse(emitter *Emitter)
+	// EmitLessThanLengthStringThenJumpIfFalse emits the handler that compares a value with
+	// the length of a string and jumps when it is not less.
+	EmitLessThanLengthStringThenJumpIfFalse(emitter *Emitter)
 }
 
 // InitialisationOperationsPort provides architecture-specific dispatch loop
