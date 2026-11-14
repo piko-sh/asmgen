@@ -40,56 +40,6 @@ func TestBuildConstraint(t *testing.T) {
 	assert.Equal(t, " && amd64", arch.BuildConstraint())
 }
 
-func TestArchitectureHeaderInclude(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	assert.Equal(t, "dispatch_amd64.h", arch.ArchitectureHeaderInclude())
-}
-
-func TestScratchRegisters(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	expected := []string{"AX", "BX", "CX", "SI", "DI"}
-	assert.Equal(t, expected, arch.ScratchRegisters())
-}
-
-func TestFloatScratchRegisters(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	expected := []string{"X0", "X1"}
-	assert.Equal(t, expected, arch.FloatScratchRegisters())
-}
-
-func TestDataTemporary(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-
-	assert.Equal(t, "SI", arch.DataTemporary(0))
-	assert.Equal(t, "SI", arch.DataTemporary(1))
-	assert.Equal(t, "SI", arch.DataTemporary(5))
-}
-
-func TestConvention(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	conv := arch.Convention()
-
-	assert.Equal(t, "R15", conv.Context)
-	assert.Equal(t, "R14", conv.ProgramCounter)
-	assert.Equal(t, "R13", conv.CodeLength)
-	assert.Equal(t, "R12", conv.CodeBase)
-	assert.Equal(t, "R8", conv.IntegersBase)
-	assert.Equal(t, "R9", conv.FloatsBase)
-	assert.Equal(t, "R10", conv.JumpTable)
-	assert.Equal(t, "R11", conv.IntegerConstantsBase)
-	assert.Equal(t, "DX", conv.InstructionWord)
-}
-
 func TestMoveRegister(t *testing.T) {
 	t.Parallel()
 

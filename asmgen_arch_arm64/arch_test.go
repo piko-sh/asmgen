@@ -40,57 +40,6 @@ func TestBuildConstraint(t *testing.T) {
 	assert.Equal(t, " && arm64", arch.BuildConstraint())
 }
 
-func TestArchitectureHeaderInclude(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	assert.Equal(t, "dispatch_arm64.h", arch.ArchitectureHeaderInclude())
-}
-
-func TestScratchRegisters(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	expected := []string{"R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"}
-	result := arch.ScratchRegisters()
-	assert.Len(t, result, 8)
-	assert.Equal(t, expected, result)
-}
-
-func TestFloatScratchRegisters(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	expected := []string{"F0", "F1", "F2", "F3"}
-	assert.Equal(t, expected, arch.FloatScratchRegisters())
-}
-
-func TestDataTemporary(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-
-	assert.Equal(t, "R5", arch.DataTemporary(2))
-	assert.Equal(t, "R6", arch.DataTemporary(3))
-}
-
-func TestConvention(t *testing.T) {
-	t.Parallel()
-
-	arch := New()
-	conv := arch.Convention()
-
-	assert.Equal(t, "R19", conv.Context)
-	assert.Equal(t, "R20", conv.ProgramCounter)
-	assert.Equal(t, "R21", conv.CodeLength)
-	assert.Equal(t, "R22", conv.CodeBase)
-	assert.Equal(t, "R23", conv.IntegersBase)
-	assert.Equal(t, "R24", conv.FloatsBase)
-	assert.Equal(t, "R25", conv.JumpTable)
-	assert.Equal(t, "R26", conv.IntegerConstantsBase)
-	assert.Equal(t, "R0", conv.InstructionWord)
-}
-
 func TestMoveRegister(t *testing.T) {
 	t.Parallel()
 

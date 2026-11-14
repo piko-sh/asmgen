@@ -66,7 +66,9 @@ type HandlerDefinition[A ArchitecturePort] struct {
 	ArchFrameSize map[Architecture]string
 
 	// Architectures, when non-nil, restricts this handler to only the listed architectures.
-	// When nil, the handler is generated for all target architectures.
+	//
+	// When nil, the handler is generated for all target architectures. A non-nil empty slice
+	// is rejected with ErrEmptyArchitectures.
 	Architectures []Architecture
 }
 
@@ -94,12 +96,24 @@ type FileGroup[A ArchitecturePort] struct {
 	// set, it overrides HeaderComment.
 	HeaderCommentFunction func(arch Architecture) string
 
-	// Includes lists .h files to #include at the top of the generated file, with
-	// architecture suffixes resolved automatically.
+	// Includes lists .h files to #include at the top of the generated file. A
+	// "_<architecture>" suffix before the extension, such as "offsets_amd64.h", is
+	// rewritten to the architecture being generated.
 	Includes []string
+
+	// ArchBuildConstraint optionally overrides BuildConstraint per architecture.
+	//
+	// An entry replaces BuildConstraint while the architecture suffix is still appended.
+	ArchBuildConstraint map[Architecture]string
 
 	// Handlers lists the handler definitions in output order.
 	Handlers []HandlerDefinition[A]
+
+	// Architectures, when non-nil, restricts the whole group to the listed architectures.
+	//
+	// When nil, the group produces one file per target architecture. A non-nil empty slice is
+	// rejected with ErrEmptyArchitectures.
+	Architectures []Architecture
 }
 
 // HeaderFile describes a .h header file to generate.
@@ -143,42 +157,13 @@ const (
 
 	// ArchitectureARM64 targets the ARM 64-bit (arm64) architecture.
 	ArchitectureARM64 Architecture = "arm64"
+
+	// ArchitectureWASM targets WebAssembly (wasm) through the Go assembler's wasm syntax.
+	ArchitectureWASM Architecture = "wasm"
 )
 
-// RegisterConvention describes the mapping from abstract dispatch register roles to
-// concrete register names for a given architecture.
-type RegisterConvention struct {
-	// Context is the register holding the DispatchContext pointer (R15 on amd64, R19 on
-	// arm64).
-	Context string
-
-	// ProgramCounter is the register holding the program counter (R14 on amd64, R20 on
-	// arm64).
-	ProgramCounter string
-
-	// CodeLength is the register holding the code length (R13 on amd64, R21 on arm64).
-	CodeLength string
-
-	// CodeBase is the register holding the code base pointer (R12 on amd64, R22 on arm64).
-	CodeBase string
-
-	// IntegersBase is the register holding the int register bank base (R8 on amd64, R23 on
-	// arm64).
-	IntegersBase string
-
-	// FloatsBase is the register holding the float register bank base (R9 on amd64, R24 on
-	// arm64).
-	FloatsBase string
-
-	// JumpTable is the register holding the dispatch jump table base (R10 on amd64, R25 on
-	// arm64).
-	JumpTable string
-
-	// IntegerConstantsBase is the register holding the int constants base (R11 on amd64, R26
-	// on arm64).
-	IntegerConstantsBase string
-
-	// InstructionWord is the register holding the current instruction word (DX on amd64, R0
-	// on arm64).
-	InstructionWord string
-}
+var (
+	// knownArchitectures lists every architecture the core names, in the order include
+	// paths are rewritten for the target architecture.
+	knownArchitectures = []Architecture{ArchitectureAMD64, ArchitectureARM64, ArchitectureWASM}
+)

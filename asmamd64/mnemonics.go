@@ -25,10 +25,6 @@ const (
 	// at SI and DI and advances both pointers.
 	InstructionCompareStringByte = "CMPSB"
 
-	// InstructionDivByZeroExitMacro is the DIV_BY_ZERO_EXIT() macro invocation that stores
-	// the divide-by-zero exit reason and returns to Go.
-	InstructionDivByZeroExitMacro = "DIV_BY_ZERO_EXIT()"
-
 	// InstructionMoveStringQuad is the MOVSQ string-instruction that copies 8 bytes from SI
 	// to DI and advances both pointers.
 	InstructionMoveStringQuad = "MOVSQ"

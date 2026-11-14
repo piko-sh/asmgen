@@ -22,172 +22,118 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-// GenerateFiles generates all .s, .h, and (optionally) .go files for the given file
-// groups and target architectures, writing them via the provided writer.
+const (
+	// missingFileMarker is the OnDisk text of a mismatch for a file that does not exist.
+	missingFileMarker = "<file does not exist>"
+
+	// generatedContentMarker is the Generated text of a mismatch for a missing file.
+	generatedContentMarker = "(generated content)"
+)
+
+// Mismatch describes the first line at which a generated file differs from the file on
+// disk.
+type Mismatch struct {
+	// File is the path to the file with the mismatch.
+	File string
+
+	// OnDisk is the line currently on disk at the mismatch point.
+	OnDisk string
+
+	// Generated is the line the generator produces at the mismatch point.
+	Generated string
+
+	// Line is the one-based line number of the first difference.
+	Line int
+}
+
+// generatedFile is one fully generated output file waiting to be written or compared.
+type generatedFile struct {
+	// path is the output path relative to the project root.
+	path string
+
+	// data is the complete file content.
+	data []byte
+}
+
+// GenerateFiles generates all .s, .h and (optionally) .go files for the given file groups
+// and target architectures, then writes them via the provided writer.
 //
-// Takes writer (FileSystemWriterPort) which writes the generated files to disk.
+// Every file is generated before any is written, so a failing handler leaves the files on
+// disk untouched.
+//
+// Takes writer (FileSystemWriterPort) which writes the generated files.
 // Takes architectures ([]A) which lists the target architectures.
 // Takes groups ([]FileGroup[A]) which defines the handler file groups.
 // Takes headers ([]HeaderFile) which defines the header files to generate.
 // Takes goFiles ([]GoFile) which defines the Go source files to generate alongside the
-// .s/.h outputs (e.g. ASM-call trampolines the .s files reference). Pass nil to skip
-// Go-file generation.
-// Takes opts (...Option) which configure the generated-file header. Pass the SAME options
-// to GenerateAndValidate so validation compares against byte-identical output.
+// .s/.h outputs. Pass nil to skip Go-file generation.
+// Takes options (...Option) which configure the generated-file header. Pass the same
+// options to GenerateAndValidate so validation compares against byte-identical output.
 //
-// Returns error when any file write fails.
+// Returns error when the inputs are invalid, generation fails or a file write fails.
 func GenerateFiles[A ArchitecturePort](
 	writer FileSystemWriterPort,
 	architectures []A,
 	groups []FileGroup[A],
 	headers []HeaderFile,
 	goFiles []GoFile,
-	opts ...Option,
+	options ...Option,
 ) error {
-	cfg := newGenerateConfig(opts)
-	for _, group := range groups {
-		for _, arch := range architectures {
-			data := generateFileGroup(group, arch, cfg)
-			filename := group.BaseName + "_" + string(arch.Arch()) + ".s"
-			path := filepath.Join(group.OutputDir, filename)
-			if err := writer.WriteFile(path, data); err != nil {
-				return fmt.Errorf("writing %s: %w", path, err)
-			}
+	if writer == nil {
+		return fmt.Errorf("%w: writer is nil", ErrInvalidOption)
+	}
+	files, err := prepareFiles(architectures, groups, headers, goFiles, options)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if err := writer.WriteFile(file.path, file.data); err != nil {
+			return fmt.Errorf("writing %s: %w", file.path, err)
 		}
 	}
-
-	archPorts := make([]ArchitecturePort, len(architectures))
-	for i, a := range architectures {
-		archPorts[i] = a
-	}
-
-	for _, header := range headers {
-		content := header.Emit(archPorts)
-		path := filepath.Join(header.Dir, header.Name)
-		if err := writer.WriteFile(path, []byte(content)); err != nil {
-			return fmt.Errorf("writing %s: %w", path, err)
-		}
-	}
-
-	for _, goFile := range goFiles {
-		content := goFile.Emit(archPorts)
-		path := filepath.Join(goFile.Dir, goFile.Name)
-		if err := writer.WriteFile(path, []byte(content)); err != nil {
-			return fmt.Errorf("writing %s: %w", path, err)
-		}
-	}
-
 	return nil
 }
 
-// Mismatch describes a character-level difference between generated and existing assembly
-// content.
-type Mismatch struct {
-	// File is the path to the file with the mismatch.
-	File string
-
-	// Expected is the expected content at the mismatch point.
-	Expected string
-
-	// Actual is the generated content at the mismatch point.
-	Actual string
-
-	// Line is the one-based line number of the first difference.
-	Line int
-}
-
 // GenerateAndValidate generates all files into memory and compares each against the
-// existing file on disk.
+// existing file read through reader.
 //
+// Takes reader (FileSystemReaderPort) which reads the existing files.
 // Takes architectures ([]A) which lists the target architectures.
 // Takes groups ([]FileGroup[A]) which defines the handler file groups.
 // Takes headers ([]HeaderFile) which defines the header files to validate.
 // Takes goFiles ([]GoFile) which defines the generated Go source files to validate. Pass
 // nil to skip Go-file validation.
-// Takes opts (...Option) which configure the generated-file header. Pass the SAME options
-// used with GenerateFiles so validation compares against byte-identical output.
+// Takes options (...Option) which configure the generated-file header. Pass the same
+// options used with GenerateFiles so validation compares against byte-identical output.
 //
-// Returns []Mismatch which lists any differences found.
-// Returns error when a file cannot be read.
+// Returns []Mismatch which lists the first difference in every differing file.
+// Returns error when the inputs are invalid, generation fails or a file cannot be read.
 func GenerateAndValidate[A ArchitecturePort](
+	reader FileSystemReaderPort,
 	architectures []A,
 	groups []FileGroup[A],
 	headers []HeaderFile,
 	goFiles []GoFile,
-	opts ...Option,
+	options ...Option,
 ) ([]Mismatch, error) {
-	cfg := newGenerateConfig(opts)
-	mismatches, err := validateAssemblyGroups(architectures, groups, cfg)
+	if reader == nil {
+		return nil, fmt.Errorf("%w: reader is nil", ErrInvalidOption)
+	}
+	files, err := prepareFiles(architectures, groups, headers, goFiles, options)
 	if err != nil {
 		return nil, err
-	}
-	headerMismatches, err := validateHeaders(architectures, headers)
-	if err != nil {
-		return nil, err
-	}
-	mismatches = append(mismatches, headerMismatches...)
-	goMismatches, err := validateGoFiles(architectures, goFiles)
-	if err != nil {
-		return nil, err
-	}
-	mismatches = append(mismatches, goMismatches...)
-	return mismatches, nil
-}
-
-// validateAssemblyGroups regenerates each architecture-specific file in every group and
-// compares it against the on-disk copy.
-//
-// Takes architectures ([]A) which is the architectures to regenerate for.
-// Takes groups ([]FileGroup[A]) which is the file groups whose contents are compared.
-// Takes cfg (generateConfig) which is the resolved header configuration.
-//
-// Returns the list of detected mismatches and a non-nil error when reading any on-disk
-// file fails.
-func validateAssemblyGroups[A ArchitecturePort](architectures []A, groups []FileGroup[A], cfg generateConfig) ([]Mismatch, error) {
-	var mismatches []Mismatch
-	for _, group := range groups {
-		for _, arch := range architectures {
-			data := generateFileGroup(group, arch, cfg)
-			filename := group.BaseName + "_" + string(arch.Arch()) + ".s"
-			path := filepath.Join(group.OutputDir, filename)
-			mismatch, err := compareWithExisting(path, data)
-			if err != nil {
-				return nil, fmt.Errorf("reading %s: %w", path, err)
-			}
-			if mismatch != nil {
-				mismatches = append(mismatches, *mismatch)
-			}
-		}
-	}
-	return mismatches, nil
-}
-
-// validateGoFiles regenerates each Go file and compares it against the on-disk copy.
-//
-// Takes architectures ([]A) which is the architectures passed through to each Go file
-// emitter.
-// Takes goFiles ([]GoFile) which is the Go files whose generated content is compared.
-//
-// Returns the list of detected mismatches and a non-nil error when reading any on-disk
-// file fails.
-func validateGoFiles[A ArchitecturePort](architectures []A, goFiles []GoFile) ([]Mismatch, error) {
-	archPorts := make([]ArchitecturePort, len(architectures))
-	for i, a := range architectures {
-		archPorts[i] = a
 	}
 	var mismatches []Mismatch
-	for _, goFile := range goFiles {
-		content := goFile.Emit(archPorts)
-		path := filepath.Join(goFile.Dir, goFile.Name)
-		mismatch, err := compareWithExisting(path, []byte(content))
+	for _, file := range files {
+		mismatch, err := compareWithExisting(reader, file.path, file.data)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", path, err)
+			return nil, fmt.Errorf("reading %s: %w", file.path, err)
 		}
 		if mismatch != nil {
 			mismatches = append(mismatches, *mismatch)
@@ -196,106 +142,185 @@ func validateGoFiles[A ArchitecturePort](architectures []A, goFiles []GoFile) ([
 	return mismatches, nil
 }
 
-// validateHeaders generates each header file and compares it with the existing file on
-// disk.
+// prepareFiles validates the generation inputs and generates every output file.
 //
 // Takes architectures ([]A) which lists the target architectures.
-// Takes headers ([]HeaderFile) which defines the header files to validate.
+// Takes groups ([]FileGroup[A]) which defines the handler file groups.
+// Takes headers ([]HeaderFile) which defines the header files.
+// Takes goFiles ([]GoFile) which defines the Go source files.
+// Takes options ([]Option) which configure the generated-file header.
 //
-// Returns []Mismatch which lists any differences found.
-// Returns error when a file cannot be read.
-func validateHeaders[A ArchitecturePort](
+// Returns []generatedFile which holds every output in generation order.
+// Returns error when the inputs are invalid or any file fails to generate.
+func prepareFiles[A ArchitecturePort](
 	architectures []A,
+	groups []FileGroup[A],
 	headers []HeaderFile,
-) ([]Mismatch, error) {
-	var mismatches []Mismatch
-
+	goFiles []GoFile,
+	options []Option,
+) ([]generatedFile, error) {
+	if err := validateGeneration(architectures, groups, headers, goFiles); err != nil {
+		return nil, err
+	}
+	config := newGenerateConfig(options)
+	files, err := generateAssemblyFiles(architectures, groups, config)
+	if err != nil {
+		return nil, err
+	}
+	architecturePorts := toArchitecturePorts(architectures)
 	for _, header := range headers {
-		archPorts := make([]ArchitecturePort, len(architectures))
-		for i, a := range architectures {
-			archPorts[i] = a
-		}
-		content := header.Emit(archPorts)
-		path := filepath.Join(header.Dir, header.Name)
+		files = append(files, generatedFile{
+			path: filepath.Join(header.Dir, header.Name),
+			data: []byte(header.Emit(architecturePorts)),
+		})
+	}
+	for _, goFile := range goFiles {
+		files = append(files, generatedFile{
+			path: filepath.Join(goFile.Dir, goFile.Name),
+			data: []byte(goFile.Emit(architecturePorts)),
+		})
+	}
+	return files, nil
+}
 
-		mismatch, err := compareWithExisting(path, []byte(content))
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", path, err)
-		}
-		if mismatch != nil {
-			mismatches = append(mismatches, *mismatch)
+// generateAssemblyFiles generates the .s file of every group for every architecture the
+// group targets, reporting every failing file rather than only the first.
+//
+// Takes architectures ([]A) which lists the target architectures.
+// Takes groups ([]FileGroup[A]) which defines the handler file groups.
+// Takes config (generateConfig) which is the resolved header configuration.
+//
+// Returns []generatedFile which holds the generated assembly files.
+// Returns error which joins the failure of every file that could not be generated.
+func generateAssemblyFiles[A ArchitecturePort](
+	architectures []A,
+	groups []FileGroup[A],
+	config generateConfig,
+) ([]generatedFile, error) {
+	var files []generatedFile
+	var failures []error
+	for _, group := range groups {
+		for _, architecture := range architectures {
+			if !targetsArchitecture(group.Architectures, architecture.Arch()) {
+				continue
+			}
+			outputPath := assemblyPath(group, architecture.Arch())
+			data, err := generateFileGroup(group, architecture, config)
+			if err != nil {
+				failures = append(failures, fmt.Errorf("generating %s: %w", outputPath, err))
+				continue
+			}
+			files = append(files, generatedFile{path: outputPath, data: data})
 		}
 	}
+	if len(failures) > 0 {
+		return nil, errors.Join(failures...)
+	}
+	return files, nil
+}
 
-	return mismatches, nil
+// toArchitecturePorts widens a typed architecture list to the core port type that header
+// and Go file emitters receive.
+//
+// Takes architectures ([]A) which lists the target architectures.
+//
+// Returns []ArchitecturePort which holds the same adapters.
+func toArchitecturePorts[A ArchitecturePort](architectures []A) []ArchitecturePort {
+	ports := make([]ArchitecturePort, len(architectures))
+	for index, architecture := range architectures {
+		ports[index] = architecture
+	}
+	return ports
 }
 
 // generateFileGroup produces the complete .s file content for a single file group and
 // architecture.
 //
 // Takes group (FileGroup[A]) which defines the handler file group to generate.
-// Takes arch (A) which specifies the target architecture.
-// Takes cfg (generateConfig) which supplies the generated-code marker and optional header.
+// Takes architecture (A) which specifies the target architecture.
+// Takes config (generateConfig) which supplies the generated-code marker and optional
+// header.
 //
-// Returns []byte containing the assembled file content.
-func generateFileGroup[A ArchitecturePort](group FileGroup[A], arch A, cfg generateConfig) []byte {
-	e := NewEmitter()
-
-	e.Line("// Code generated by " + cfg.generatedByTool + "; DO NOT EDIT.")
-	if cfg.fileHeader != "" {
-		e.Blank()
-		e.Raw(cfg.fileHeader + "\n")
-	}
-	e.Blank()
-
-	constraint := group.BuildConstraint + arch.BuildConstraint()
-	e.Line("//go:build " + constraint)
-	e.Blank()
-
-	for _, inc := range group.Includes {
-		resolved := resolveArchInclude(inc, arch)
-		e.Line("#include \"" + resolved + "\"")
-	}
-	e.Blank()
+// Returns []byte which contains the assembled file content.
+// Returns error when a handler records a failure or fails the adapter's validation.
+func generateFileGroup[A ArchitecturePort](group FileGroup[A], architecture A, config generateConfig) ([]byte, error) {
+	emitter := NewEmitter()
+	emitFilePreamble(emitter, group, architecture, config)
 
 	headerComment := group.HeaderComment
 	if group.HeaderCommentFunction != nil {
-		headerComment = group.HeaderCommentFunction(arch.Arch())
+		headerComment = group.HeaderCommentFunction(architecture.Arch())
 	}
 	if headerComment != "" {
-		e.Comment(headerComment)
+		emitter.Comment(headerComment)
 	}
 
-	hasHeaderComment := headerComment != ""
+	var failures []error
 	emitted := false
 	for _, handler := range group.Handlers {
-		if !handlerTargetsArch(handler, arch) {
+		if !targetsArchitecture(handler.Architectures, architecture.Arch()) {
 			continue
 		}
-		if emitted || hasHeaderComment {
-			e.Blank()
+		if emitted || headerComment != "" {
+			emitter.Blank()
 		}
-		generateHandler(e, handler, arch)
+		if err := generateHandler(emitter, handler, architecture); err != nil {
+			failures = append(failures, fmt.Errorf("handler %s: %w", handler.Name, err))
+		}
 		emitted = true
 	}
 
-	return e.Bytes()
+	if len(failures) > 0 {
+		return nil, errors.Join(failures...)
+	}
+	return emitter.Bytes(), nil
+}
+
+// emitFilePreamble writes the generated-code marker, optional file header, build
+// constraint and include directives that open every generated .s file.
+//
+// Takes emitter (*Emitter) which receives the preamble.
+// Takes group (FileGroup[A]) which supplies the constraint and includes.
+// Takes architecture (A) which specifies the target architecture.
+// Takes config (generateConfig) which supplies the marker tool name and file header.
+func emitFilePreamble[A ArchitecturePort](emitter *Emitter, group FileGroup[A], architecture A, config generateConfig) {
+	emitter.Line("// Code generated by " + config.generatedByTool + "; DO NOT EDIT.")
+	if config.fileHeader != "" {
+		emitter.Blank()
+		emitter.Raw(config.fileHeader + "\n")
+	}
+	emitter.Blank()
+
+	constraint := group.BuildConstraint
+	if override, ok := group.ArchBuildConstraint[architecture.Arch()]; ok {
+		constraint = override
+	}
+	emitter.Line("//go:build " + constraint + architecture.BuildConstraint())
+	emitter.Blank()
+
+	for _, include := range group.Includes {
+		emitter.Line("#include \"" + resolveArchInclude(include, architecture.Arch()) + "\"")
+	}
+	emitter.Blank()
 }
 
 // generateHandler emits a single TEXT block for the given handler definition.
 //
-// Takes e (*Emitter) which receives the generated assembly.
+// Takes emitter (*Emitter) which receives the generated assembly.
 // Takes handler (HandlerDefinition[A]) which defines the handler to emit.
-// Takes arch (A) which specifies the target architecture.
-func generateHandler[A ArchitecturePort](e *Emitter, handler HandlerDefinition[A], arch A) {
+// Takes architecture (A) which specifies the target architecture.
+//
+// Returns error when the handler records a failure on the emitter or, for an adapter
+// that implements HandlerValidator, when its body fails validation.
+func generateHandler[A ArchitecturePort](emitter *Emitter, handler HandlerDefinition[A], architecture A) error {
 	comment := handler.Comment
 	if handler.CommentFunction != nil {
-		comment = handler.CommentFunction(arch.Arch())
+		comment = handler.CommentFunction(architecture.Arch())
 	}
-	e.Comment(comment)
+	emitter.Comment(comment)
 
 	frameSize := handler.FrameSize
-	if override, ok := handler.ArchFrameSize[arch.Arch()]; ok {
+	if override, ok := handler.ArchFrameSize[architecture.Arch()]; ok {
 		frameSize = override
 	}
 	if frameSize == "" {
@@ -303,96 +328,117 @@ func generateHandler[A ArchitecturePort](e *Emitter, handler HandlerDefinition[A
 	}
 
 	flagsValue := handler.Flags
-	if override, ok := handler.ArchFlags[arch.Arch()]; ok {
+	if override, ok := handler.ArchFlags[architecture.Arch()]; ok {
 		flagsValue = override
 	}
-	flags := ""
+	flags := ", "
 	if flagsValue != "" {
 		flags = ", " + flagsValue + ", "
-	} else {
-		flags = ", "
 	}
 
-	e.Line("TEXT \xc2\xb7" + handler.Name + "(SB)" + flags + frameSize)
+	emitter.Line("TEXT \xc2\xb7" + handler.Name + "(SB)" + flags + frameSize)
 
-	handler.Emit(e, arch)
+	bodyStart := emitter.Len()
+	failuresBefore := len(emitter.failures)
+	handler.Emit(emitter, architecture)
+	if len(emitter.failures) > failuresBefore {
+		return errors.Join(emitter.failures[failuresBefore:]...)
+	}
+	validator, ok := any(architecture).(HandlerValidator)
+	if !ok {
+		return nil
+	}
+	err := validator.ValidateHandler(handler.Name, string(emitter.Bytes()[bodyStart:]))
+	if err != nil && !errors.Is(err, ErrHandlerValidation) {
+		return fmt.Errorf("%w: %w", ErrHandlerValidation, err)
+	}
+	return err
 }
 
-// handlerTargetsArch reports whether the handler should be generated for the given
+// targetsArchitecture reports whether an Architectures restriction admits the given
 // architecture.
 //
-// Takes handler (HandlerDefinition[A]) which defines the handler to check.
-// Takes arch (A) which specifies the architecture to match.
+// Takes restriction ([]Architecture) which is a group's or handler's Architectures field.
+// Takes architecture (Architecture) which is the architecture to match.
 //
-// Returns bool which is true when the handler targets the given architecture.
-func handlerTargetsArch[A ArchitecturePort](handler HandlerDefinition[A], arch A) bool {
-	if len(handler.Architectures) == 0 {
+// Returns bool which is true when the architecture is admitted.
+func targetsArchitecture(restriction []Architecture, architecture Architecture) bool {
+	if restriction == nil {
 		return true
 	}
-	return slices.Contains(handler.Architectures, arch.Arch())
+	return slices.Contains(restriction, architecture)
 }
 
-// resolveArchInclude replaces architecture name placeholders in an include path with the
-// actual target architecture name.
+// assemblyPath returns the output path of a group's .s file for one architecture.
 //
-// Takes include (string) which is the include path that may contain architecture
-// placeholders.
-// Takes arch (A) which provides the target architecture name.
+// Takes group (FileGroup[A]) which supplies the base name and output directory.
+// Takes architecture (Architecture) which supplies the file name suffix.
 //
-// Returns string with placeholders replaced by the actual architecture name.
-func resolveArchInclude[A ArchitecturePort](include string, arch A) string {
-	archName := string(arch.Arch())
-	include = strings.ReplaceAll(include, "amd64", archName)
-	include = strings.ReplaceAll(include, "arm64", archName)
+// Returns string which is the joined output path.
+func assemblyPath[A ArchitecturePort](group FileGroup[A], architecture Architecture) string {
+	return filepath.Join(group.OutputDir, group.BaseName+"_"+string(architecture)+".s")
+}
+
+// resolveArchInclude rewrites a file name's architecture suffix for the target.
+//
+// Only a "_<architecture>" suffix directly before the extension is rewritten.
+//
+// Takes include (string) which is the include path.
+// Takes architecture (Architecture) which is the target architecture.
+//
+// Returns string which is the include path for the target architecture.
+func resolveArchInclude(include string, architecture Architecture) string {
+	directory, file := path.Split(include)
+	extension := path.Ext(file)
+	stem := strings.TrimSuffix(file, extension)
+	for _, known := range knownArchitectures {
+		if trimmed, ok := strings.CutSuffix(stem, "_"+string(known)); ok {
+			return directory + trimmed + "_" + string(architecture) + extension
+		}
+	}
 	return include
 }
 
-// compareWithExisting reads the file at path and compares it line-by-line against the
+// compareWithExisting reads the file at filePath and compares it line by line with the
 // generated content.
 //
-// Takes path (string) which is the file path to read and compare against.
+// Takes reader (FileSystemReaderPort) which reads the existing file.
+// Takes filePath (string) which is the file path to read and compare against.
 // Takes generated ([]byte) which contains the newly generated content.
 //
 // Returns *Mismatch which describes the first difference found, or nil if the files
 // match.
-// Returns error when the file cannot be read.
-func compareWithExisting(path string, generated []byte) (*Mismatch, error) {
-	cleanedPath := filepath.Clean(path)
-	existing, err := os.ReadFile(cleanedPath)
+// Returns error when the file exists but cannot be read.
+func compareWithExisting(reader FileSystemReaderPort, filePath string, generated []byte) (*Mismatch, error) {
+	existing, err := reader.ReadFile(filePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return &Mismatch{File: filePath, Line: 1, OnDisk: missingFileMarker, Generated: generatedContentMarker}, nil
+	}
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return &Mismatch{
-				File:     path,
-				Line:     1,
-				Expected: "<file does not exist>",
-				Actual:   "(generated content)",
-			}, nil
-		}
 		return nil, err
 	}
 
 	existingLines := strings.Split(string(existing), "\n")
 	generatedLines := strings.Split(string(generated), "\n")
-
-	maxLines := max(len(existingLines), len(generatedLines))
-
-	for i := range maxLines {
-		var existingLine, generatedLine string
-		if i < len(existingLines) {
-			existingLine = existingLines[i]
-		}
-		if i < len(generatedLines) {
-			generatedLine = generatedLines[i]
-		}
+	for index := range max(len(existingLines), len(generatedLines)) {
+		existingLine := lineAt(existingLines, index)
+		generatedLine := lineAt(generatedLines, index)
 		if existingLine != generatedLine {
-			return &Mismatch{
-				File:     path,
-				Line:     i + 1,
-				Expected: existingLine,
-				Actual:   generatedLine,
-			}, nil
+			return &Mismatch{File: filePath, Line: index + 1, OnDisk: existingLine, Generated: generatedLine}, nil
 		}
 	}
-
 	return nil, nil
+}
+
+// lineAt returns the line at index, or an empty string past the end.
+//
+// Takes lines ([]string) which are the split lines.
+// Takes index (int) which is the zero-based line index.
+//
+// Returns string which is the line or empty.
+func lineAt(lines []string, index int) string {
+	if index < len(lines) {
+		return lines[index]
+	}
+	return ""
 }
